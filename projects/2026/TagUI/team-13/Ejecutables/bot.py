@@ -19,8 +19,7 @@
 #   internet: alcanza con que la PC tenga conexión.
 
 import random
-import subprocess
-import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -28,23 +27,22 @@ import requests
 
 #Traemos los modulos de compras y robot_telegram_web para poder usar sus funciones
 import compras
-import robot_telegram_web
+import procesamiento
 from configuracion import leer_config
 
-#leemos la configuracion del archivo config.txt para obtener el token del bot, el chat_id permitido y el nombre del grupo de telegram
-CONFIG = leer_config()
-API = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_TOKEN']}/"
-CHAT_PERMITIDO = int(CONFIG["TELEGRAM_CHAT_ID"])
-GRUPO = CONFIG["GRUPO_TELEGRAM"]
-
-ROBOT = Path(__file__).resolve().parent / "robot_telegram_web.py"
-# Si el robot tarda más que esto, se da por colgado (una corrida normal
-# tarda menos de un minuto)
-MINUTOS_MAXIMOS_ROBOT = 3
+# La configuración se carga en main(), no al importar el módulo, para poder
+# probar la interfaz sin credenciales ni conexiones a Telegram.
+API = None
+API_ARCHIVOS = None
+CHAT_PERMITIDO = None
+GRUPO = ""
 
 # Estado de cada menú de botones abierto, por (chat_id, message_id):
 #   {"modo": "principal" | "una" | "varias", "elegidas": [...]}
 menus = {}
+esperando_foto_factura = set()
+fotos_factura = {}
+confirmaciones_factura = {}
 
 
 # LLAMADAS A LA BOT API
@@ -89,6 +87,7 @@ def botones_principales():
         [{"text": "📖 Ver recetas", "callback_data": "recetas"},
          {"text": "➕ Cargar receta", "callback_data": "cargar"}],
         [{"text": "🥫 Mi alacena", "callback_data": "alacena"}],
+        [{"text": "🧾 Cargar factura", "callback_data": "factura:nueva"}],
     ]
 
 #Esta función devuelve los botones para elegir comidas según el modo (una, varias, recetas o día) y la lista de comidas disponibles
@@ -157,6 +156,9 @@ def atender_boton(consulta):
     dato = consulta["data"]
     llamar("answerCallbackQuery", callback_query_id=consulta["id"])
 
+    if dato.startswith("factura:"):
+        atender_boton_de_factura(chat_id, message_id, dato)
+        return
     if dato.startswith("carga:"):
         atender_boton_de_carga(chat_id, message_id, dato)
         return
@@ -248,6 +250,96 @@ def atender_boton(consulta):
     elif dato == "alacena:actualizar":
         del menus[(chat_id, message_id)]
         empezar_edicion_alacena(chat_id, message_id)
+
+
+def descargar_foto_telegram(file_id):
+    """Descarga una foto de Telegram a un archivo temporal y devuelve su ruta."""
+    archivo = llamar("getFile", file_id=file_id)
+    if not archivo.get("ok"):
+        raise RuntimeError(archivo.get("description", "Telegram no encontró la foto"))
+
+    ruta_remota = archivo["result"]["file_path"]
+    respuesta = requests.get(API_ARCHIVOS + ruta_remota, timeout=60)
+    respuesta.raise_for_status()
+    sufijo = Path(ruta_remota).suffix or ".jpg"
+    with tempfile.NamedTemporaryFile(prefix="factura_", suffix=sufijo, delete=False) as temporal:
+        temporal.write(respuesta.content)
+    return Path(temporal.name)
+
+
+def _limpiar_foto_factura(chat_id):
+    ruta = fotos_factura.pop(chat_id, None)
+    if ruta:
+        ruta.unlink(missing_ok=True)
+
+
+def pedir_foto_factura(chat_id, message_id):
+    _limpiar_foto_factura(chat_id)
+    confirmaciones_factura.pop(chat_id, None)
+    esperando_foto_factura.add(chat_id)
+    editar(chat_id, message_id, "🧾 Enviame una foto clara de la factura o ticket.",
+           [[{"text": "❌ Cancelar", "callback_data": "factura:cancelar"}]])
+
+
+def atender_foto_factura(chat_id, fotos):
+    if chat_id not in esperando_foto_factura:
+        return
+    foto = max(fotos, key=lambda item: item.get("file_size", 0))
+    try:
+        ruta = descargar_foto_telegram(foto["file_id"])
+    except (requests.RequestException, RuntimeError, KeyError) as error:
+        responder(chat_id, f"⚠ No pude descargar la foto: {error}. Mandala de nuevo o tocá /cancelar.")
+        return
+    _limpiar_foto_factura(chat_id)
+    fotos_factura[chat_id] = ruta
+    esperando_foto_factura.discard(chat_id)
+    responder(chat_id, "✅ Foto recibida y descargada. Quedó preparada para el módulo lector; "
+              "la alacena todavía no fue modificada.")
+
+
+def solicitar_confirmacion_factura(chat_id, ingredientes):
+    """Muestra el resultado del lector externo y espera confirmación explícita."""
+    lineas = [f"- {nombre}: {compras.formatear_cantidad(cantidad)} {unidad}"
+              for nombre, cantidad, unidad in ingredientes]
+    enviado = responder(
+        chat_id,
+        "Revisá los productos detectados. Todavía no actualicé la alacena.\n\n"
+        + "\n".join(lineas),
+        [[{"text": "✅ Confirmar", "callback_data": "factura:confirmar"},
+          {"text": "❌ Cancelar", "callback_data": "factura:cancelar"}]],
+    )
+    if enviado.get("ok"):
+        confirmaciones_factura[chat_id] = {
+            "message_id": enviado["result"]["message_id"],
+            "ingredientes": ingredientes,
+        }
+
+
+def atender_boton_de_factura(chat_id, message_id, dato):
+    if dato == "factura:nueva":
+        menu = menus.pop((chat_id, message_id), None)
+        if menu is not None:
+            pedir_foto_factura(chat_id, message_id)
+        return
+
+    confirmacion = confirmaciones_factura.get(chat_id)
+    if dato == "factura:confirmar":
+        if confirmacion is None or confirmacion["message_id"] != message_id:
+            editar(chat_id, message_id, "Esta confirmación ya no está activa. Mandá /start para empezar de nuevo.")
+            return
+        try:
+            compras.sumar_al_stock(confirmacion["ingredientes"])
+        except compras.ErrorDeDatos as error:
+            editar(chat_id, message_id, f"⚠ No actualicé la alacena: {error}")
+            return
+        del confirmaciones_factura[chat_id]
+        _limpiar_foto_factura(chat_id)
+        editar(chat_id, message_id, "✅ Compra confirmada.\n\n" + texto_alacena())
+    elif dato == "factura:cancelar":
+        esperando_foto_factura.discard(chat_id)
+        confirmaciones_factura.pop(chat_id, None)
+        _limpiar_foto_factura(chat_id)
+        editar(chat_id, message_id, "❌ Carga de factura cancelada. No actualicé la alacena.")
 
 
 # ==================================================================
@@ -435,69 +527,40 @@ def terminar_edicion_alacena(chat_id, message_id):
 
 # ==================================================================
 # EL PROCESO: calcular la lista y que el robot la mande
-#esta función ejecuta el robot en un proceso aparte, con un tiempo máximo de espera, para evitar que se quede colgado si Chrome o TagUI se cuelgan
-def ejecutar_robot(mensaje):
-    """
-    Corre el robot en un proceso aparte, con tiempo máximo. Así, si Chrome o
-    TagUI se cuelgan (por ejemplo, con la PC bloqueada), el bot no se queda
-    esperando para siempre: corta el robot y sigue atendiendo.
-    """
-    robot_telegram_web.CAPTURA.unlink(missing_ok=True)  # que no quede la captura de una corrida anterior
-    try:
-        proceso = subprocess.run(
-            [sys.executable, str(ROBOT), "--enviar", GRUPO],
-            input=mensaje.encode("utf-8"), capture_output=True,
-            timeout=MINUTOS_MAXIMOS_ROBOT * 60, cwd=ROBOT.parent,
-        )
-    except subprocess.TimeoutExpired:
-        robot_telegram_web.terminar_procesos_tagui()
-        raise robot_telegram_web.ErrorDelRobot(
-            f"tardó más de {MINUTOS_MAXIMOS_ROBOT} minutos y lo corté. ¿La PC está "
-            "bloqueada? Con la sesión bloqueada Chrome no dibuja las páginas"
-        )
-    if proceso.returncode != 0:
-        errores = proceso.stderr.decode("utf-8", errors="replace").strip().splitlines()
-        raise robot_telegram_web.ErrorDelRobot(errores[-1] if errores else "falló sin dar detalles")
-    return robot_telegram_web.CAPTURA
-
 #esta función cierra el menú de botones y procesa las comidas seleccionadas, calculando la lista de compras, guardando la evidencia y ejecutando el robot para enviar la lista al grupo de Telegram
 def cerrar_menu_y_procesar(chat_id, message_id, seleccionadas, descripcion=None):
     del menus[(chat_id, message_id)]
     editar(chat_id, message_id, f"Pedido: {descripcion or resumen(seleccionadas)}")
 
     try:
-        faltantes, advertencias = compras.calcular_lista(seleccionadas)
+        resultado = procesamiento.procesar_pedido(seleccionadas, GRUPO)
     except compras.ErrorDeDatos as error:
         responder(chat_id, f"⚠ No pude leer los datos: {error}")
         return
 
     # PERTURBACION EXOGENA: comidas del pedido que no tienen receta cargada
-    if advertencias:
+    if resultado.advertencias:
         responder(chat_id, "⚠ No tienen receta cargada en BaseDatos.csv (no se cuentan): "
-                  + ", ".join(advertencias))
+                  + ", ".join(resultado.advertencias))
 
-    if not faltantes:
+    if not resultado.faltantes:
         responder(chat_id, "No hay nada para comprar: el stock actual alcanza para lo elegido.")
         return
 
-    mensaje = compras.armar_mensaje(faltantes)
-    compras.guardar_evidencia(mensaje)
     responder(chat_id, f"🤖 Abro Telegram Web y le escribo la lista al grupo «{GRUPO}»...")
 
-    try:
-        captura = ejecutar_robot(mensaje)
-    except robot_telegram_web.ErrorDelRobot as error:
+    if resultado.error_robot:
         # ERROR EN ESTADO ESTABLE: el cálculo salió bien pero el sistema no
         # llega al resultado esperado (no hay sesión en Telegram Web, no
         # encuentra el grupo, se cortó la conexión). Para que la lista no se
         # pierda, el bot la manda él mismo por la Bot API.
-        responder(chat_id, f"⚠ El robot no pudo mandarla por Telegram Web: {error}\n\n"
-                  f"Te la mando yo:\n\n{mensaje}")
+        responder(chat_id, f"⚠ El robot no pudo mandarla por Telegram Web: {resultado.error_robot}\n\n"
+                  f"Te la mando yo:\n\n{resultado.mensaje}")
         return
 
     confirmacion = f"✅ Lista enviada al grupo «{GRUPO}»"
-    if captura.exists():
-        mandar_foto(chat_id, captura, confirmacion)
+    if resultado.captura and resultado.captura.exists():
+        mandar_foto(chat_id, resultado.captura, confirmacion)
     else:
         responder(chat_id, confirmacion)
 
@@ -525,11 +588,15 @@ def atender(actualizacion):
     if "callback_query" in actualizacion:
         atender_boton(actualizacion["callback_query"])
         return
-    chat_id = actualizacion["message"]["chat"]["id"]
-    texto = actualizacion["message"].get("text", "")
+    mensaje = actualizacion["message"]
+    chat_id = mensaje["chat"]["id"]
+    texto = mensaje.get("text", "")
     # en grupos el comando puede llegar como /start@nombre_del_bot
     comando = texto.split()[0].split("@")[0] if texto else ""
     if comando in ("/start", "/menu", "/cancelar"):
+        esperando_foto_factura.discard(chat_id)
+        confirmaciones_factura.pop(chat_id, None)
+        _limpiar_foto_factura(chat_id)
         # un comando corta cualquier carga o edición que haya quedado a medias
         if cargas.pop(chat_id, None) is not None:
             responder(chat_id, "❌ Carga de receta cancelada, no guardé nada.")
@@ -538,6 +605,8 @@ def atender(actualizacion):
             responder(chat_id, "Dejé de editar la alacena (lo que ya mandaste quedó guardado).")
         if comando != "/cancelar":
             abrir_menu(chat_id)
+    elif mensaje.get("photo"):
+        atender_foto_factura(chat_id, mensaje["photo"])
     elif texto and chat_id in cargas:
         atender_texto_de_carga(chat_id, texto)
     elif texto and chat_id in alacenas_en_edicion:
@@ -545,6 +614,13 @@ def atender(actualizacion):
 
 #esta función es el punto de entrada del programa, que verifica el token del bot, descarta los pedidos pendientes y entra en un bucle para recibir actualizaciones de Telegram y atenderlas
 def main():
+    global API, API_ARCHIVOS, CHAT_PERMITIDO, GRUPO
+    config = leer_config()
+    API = f"https://api.telegram.org/bot{config['TELEGRAM_TOKEN']}/"
+    API_ARCHIVOS = f"https://api.telegram.org/file/bot{config['TELEGRAM_TOKEN']}/"
+    CHAT_PERMITIDO = int(config["TELEGRAM_CHAT_ID"])
+    GRUPO = config["GRUPO_TELEGRAM"]
+
     bot = llamar("getMe")
     if not bot.get("ok"):
         raise SystemExit("El token de config.txt no es válido.")

@@ -4,20 +4,17 @@ La idea general es que es un bot de telegram que corre en nuestra pc, queda espe
 # BLOQUE 1 - IMPORTS Y CONFIGS #
 En la primer parte podemos ver que tenemos ciertos imports, la idea es que utilizamos:
 1. *Random*: para sortear un menú semanal al azar.
-2. *subprocess*: para correr el robot como otro programa parte.
-3. *sys*: esto lo usamos por que al momento de ejecutar el iniciar_bot esta corriendo ese archivo python, entonces con esto tenemos la misma ruta.
-4. *time*: lo usamos para el time.sleep para cuando no hay internet o se corta.
-5. *path*: Esto lo usamos para el manejo de rutas de archivos mas facilmente.
-6. *request*: esto es para hacer llamadas HTTP a la Api de Telgram.
-7. *compras*: este es el otro archivo donde trabajamos con las recetas, stock y calculos.
-8. *robot_telegram_web*: este es el modulo que maneja la parte de RPA donde se abre chrome y todo eso.
+2. *time*: lo usamos para el time.sleep para cuando no hay internet o se corta.
+3. *requests*: esto es para hacer llamadas HTTP a la API de Telegram.
+4. *compras*: permite consultar recetas, stock y menú para construir las pantallas.
+5. *procesamiento*: coordina el cálculo del pedido y el envío con el robot, sin manejar la conversación.
 
 **CONSTANTES GLOBALES**
 En esta siguiente parte traemos todo del archivo de configuracion, la idea es que este se modifica segun el usuario ya que no todos tenemos el mismo bot, entonces segun el usuario este tiene que cambiar estos datos para que el robot funcione, osea el telegramid, token y demas.
-El Robot = Path lo que hace es que el bot puedan encontrar esta carpeta por mas que lo ejecutemos desde otra.
+La ejecución de Chrome y TagUI queda fuera de `bot.py`, dentro de `procesamiento.py` y `robot_telegram_web.py`.
 
 **ESTADO EN MEMORIA**
-Vemos que definimos menu = {}, el proposito de esto es un diccionario que guarda el chat y el mensaje del mismo entonces se guarda el estado en el que esta el chat, en caso de que se reinicie, como esta en memoria, se borraria.
+`menus` guarda el estado de navegación; `esperando_foto_factura`, `fotos_factura` y `confirmaciones_factura` mantienen los pasos de la carga del ticket. Se borra al reiniciar el bot. La configuración se lee al iniciar `main()`, no al importar el módulo, para poder probar la interfaz sin credenciales.
 
 # BLOQUE 2 - LLAMADAS A LA BOT API #
 Esta capa es la que hace la base de comunicacion con telegram. El primer metodo es el *llamar*, esta es la funcion base, todas las demas la usan.
@@ -112,23 +109,20 @@ Ademas verifica  si tipeaste mal o cosas asi y quita lo sbotones del resumen ant
 Esta funcion verifica que sea el ultimo resumen, borra el estado y confirma la carga.
 
 # BLOQUE 7 - PROCESO PRINCIPAL [CALCULAR Y ENVIAR] #
-**ejecutar_robot**
-Este proceso es la parte mas tecnica, corre el bot como un proceso separado evitando que se cuelgue.
-
-En el primer try vemos que usamos el proceso aparte y no llamamos a una funcion directamente por el timeout, si chrome por ejemplo se cuelga, supongamos que bloqueamos la pc, una funcion normal dejaria el bot trabado, con *subprocess* se puede cortar luego de cierto tiempo.
-
-Antes de correr lo que hace es que borra la captura vieja para no mandar una foto anterior, si se pasa del tiempo mata los procesos en caso de que el robot termine con error toma la ultima linea de lo que hizo que suele ser el mensaje del error y devuelve un ErrorDelRobot. Si sale bien, devuelve la ruta de la captura.
-
 **cerrar_menu_y_procesa**
-esta función cierra el menú de botones y procesa las comidas seleccionadas, calculando la lista de compras, guardando la evidencia y ejecutando el robot para enviar la lista al grupo de Telegram. 
+Esta función cierra el menú, llama a `procesamiento.procesar_pedido` y presenta el resultado en Telegram. No conoce cómo se inicia Chrome ni cómo funciona TagUI.
 
-Primero borra el menu de menus, osea que ya se usom luego edita el mensaje mediante la funcion resumen y la editar.
-Hace un try para comprobar errores de datos o faltantes., en caso de que tengamos, lo muestra, en caso de que no tengamos nada, avisa y termina.
+Si faltan datos, muestra el error; si no hay nada que comprar, lo informa y termina. Si el robot falla, envía la lista como texto mediante la Bot API para que el pedido no se pierda.
 
-Luego arma el mensaje y guarda la evidencia en un archivo, avisa que abre telegram y ejecuta el bot.
-En caso de que falla, hay un plan B que es que el robot manda por la API el mensaje asi no se pierde pero avisa del error en un comentario.
+**procesamiento.py**
+Este módulo calcula los faltantes, guarda el mensaje como evidencia y ejecuta `robot_telegram_web.py` como proceso separado con un tiempo máximo. Devuelve un `ResultadoPedido` con faltantes, advertencias, mensaje, captura o el error del robot. No hace llamadas a la Bot API, así se puede probar sin iniciar Telegram ni Chrome.
 
-En caso de que pudo enviarlo avisa de que se envio y adjunta la captura de lo mismo.
+**CARGAR FACTURA DESDE TELEGRAM**
+El botón 🧾 inicia el estado de espera de foto. `descargar_foto_telegram` llama a `getFile` y guarda la imagen en un archivo temporal. El lector IA todavía no está implementado: el módulo futuro deberá analizar esa ruta y llamar a `solicitar_confirmacion_factura(chat_id, ingredientes)` con los productos reconocidos.
+
+La confirmación usa `factura:confirmar` o `factura:cancelar`. Solo al confirmar se llama a `compras.sumar_al_stock`; cancelar o reiniciar limpia la foto temporal y no cambia el stock. `sumar_al_stock` conserva las cantidades existentes y rechaza unidades incompatibles.
+
+Las pruebas aisladas están en `tests/` y se ejecutan con `PYTHONPATH=Ejecutables python3 -m unittest discover -s tests -v`.
 
 # BLOQUE 8 - BUCLE PRINCIPAL #
 **descargar_pendientes**
@@ -159,5 +153,5 @@ if __name__ == "__main__": solo se ejecuta si se corre el archivo directamente, 
 2. Tocás "🛒 Varias comidas" → atender_boton con dato="modo:varias" → se edita el mensaje con la lista de comidas.
 3. Tocás "Asado" dos veces → sumar:0 dos veces → elegidas = ["Asado", "Asado"].
 4. Tocás "✅ Listo" → cerrar_menu_y_procesar(["Asado", "Asado"]).
-5. compras.calcular_lista → faltan 2 kg de carne → armar_mensaje → ejecutar_robot.
+5. `procesamiento.procesar_pedido` calcula la lista, guarda evidencia y delega el envío a `robot_telegram_web.py`.
 6. El robot abre Chrome, escribe en el grupo y saca una captura → el bot te la manda con "✅ Lista enviada".

@@ -193,6 +193,34 @@ def actualizar_stock(cambios):
     _escribir_csv("StockActual.csv", ["Ingrediente", "CantidadDisponible", "Unidad"], stock.values())
 
 
+def sumar_al_stock(compras_recibidas):
+    """Suma productos confirmados de una factura al stock existente."""
+    stock = {
+        normalizar(nombre): [nombre, float(cantidad), unidad]
+        for nombre, cantidad, unidad in stock_actual()
+    }
+    for nombre, cantidad, unidad in compras_recibidas:
+        nombre, cantidad, unidad = interpretar_ingrediente(
+            f"{nombre}, {cantidad}, {unidad}"
+        )
+        clave = normalizar(nombre)
+        if clave in stock:
+            existente = stock[clave]
+            if existente[2] != unidad:
+                raise ErrorDeDatos(
+                    f"{nombre} ya está en {existente[2]}, no se puede sumar en {unidad}"
+                )
+            existente[1] += float(cantidad)
+        else:
+            stock[clave] = [nombre, float(cantidad), unidad]
+
+    filas = [
+        [nombre, formatear_cantidad(cantidad), unidad]
+        for nombre, cantidad, unidad in stock.values()
+    ]
+    _escribir_csv("StockActual.csv", ["Ingrediente", "CantidadDisponible", "Unidad"], filas)
+
+
 def calcular_lista(seleccionadas):
     """
     Devuelve (faltantes, advertencias):
