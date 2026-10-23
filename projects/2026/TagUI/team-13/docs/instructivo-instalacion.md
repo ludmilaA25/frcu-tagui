@@ -47,7 +47,7 @@ archivos `.csv` como texto plano, justamente para que funcione igual en cualquie
 1. Instalá Python, pip y **PHP**. En Linux, a diferencia de Windows, TagUI **no** trae
    PHP incluido: lo busca en el sistema, y si falta falla con errores confusos.
    ```bash
-   sudo apt update && sudo apt install python3 python3-pip php-cli
+   sudo apt update && sudo apt install python3 python3-pip python-is-python3 php-cli curl
    ```
    (en Fedora/RHEL: `sudo dnf install python3 python3-pip php-cli`)
 2. Instalá Google Chrome (el paquete `.deb` de https://www.google.com/chrome/ ).
@@ -61,9 +61,7 @@ archivos `.csv` como texto plano, justamente para que funcione igual en cualquie
    python3 -m pip install --user --break-system-packages -r requirements.txt
    ```
 
-> **Nota honesta:** la instalación en Linux **todavía no se probó** en este proyecto 
-> . Los pasos salen de la documentación de la librería `rpa`, que avisa que en Linux hace falta PHP.
-> **Cuando alguien lo pruebe en Linux, actualizar esta sección con lo que realmente pasó.**
+> **Estado de la prueba en Linux:** en Ubuntu 26.04 se verificó que TagUI inicia y navega a Telegram Web. 
 
 ---
 
@@ -210,5 +208,8 @@ terminada.
 | Telegram Web queda en blanco | La PC estaba bloqueada. Con la sesión de Windows bloqueada, Chrome no dibuja las páginas. |
 | `no encontré el chat «...»` | El nombre del chat no coincide exacto, o no es un chat tuyo. Por seguridad, el robot solo elige entre tus chats: nunca entre los resultados de la búsqueda global. |
 | (Linux) errores raros de PHP | Falta instalar `php-cli`. Ver el Paso 1. |
+| (Linux) Chrome queda en `about:blank` sin errores | Falta `curl`, que TagUI usa para conectarse al Chrome que abrió. Instalalo con `sudo apt install curl`, cerrá los procesos de TagUI/Chrome que quedaron abiertos y volvé a correr el robot. |
+| (Linux) `env: 'python': No existe el archivo o directorio` | TagUI necesita el comando `python`, que algunas distribuciones no instalan junto con `python3`. Instalá el alias con `sudo apt install python-is-python3` y verificá con `python --version`. |
+| (Linux) `Auto configuration failed` de OpenSSL al iniciar TagUI | El motor antiguo de TagUI no entiende algunas directivas OpenSSL del sistema. `robot_telegram_web.py` aplica automáticamente un ajuste acotado a TagUI en Linux. |
 | (Linux) `externally-managed-environment` al instalar | Ver el Paso 1: agregar `--user --break-system-packages` al `pip install`. |
 | (Linux) `Permission denied` al correr `iniciar_bot.sh` | El archivo perdió el permiso de ejecución. Corré `chmod +x Ejecutables/iniciar_bot.sh`, o prendelo con `sh Ejecutables/iniciar_bot.sh`. |
