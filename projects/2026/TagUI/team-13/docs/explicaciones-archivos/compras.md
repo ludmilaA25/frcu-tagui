@@ -115,6 +115,9 @@ Si la cantidad es 0, saca el ingrediente de la alacena (el *pop* con *None* es p
 Si no, pisa el valor. Es importante que no suma: la cantidad que mandás es la que hay.
 Al final reescribe el CSV entero con *stock.values()*. Como los diccionarios de Python mantienen el orden en el que se cargaron, los ingredientes que ya estaban quedan en su lugar y los nuevos van al final.
 
+**sumar_al_stock**
+Se usa para confirmar los productos detectados en una factura. A diferencia de `actualizar_stock`, suma cada compra a lo que ya existe. Valida nombres, cantidades y unidades con `interpretar_ingrediente`, y rechaza una unidad incompatible antes de escribir el CSV.
+
 # BLOQUE 5 - CALCULAR LA LISTA (EL CORAZÓN DEL SISTEMA) #
 **calcular_lista**
 Esta es la lógica central del proyecto: recibe las comidas elegidas y devuelve qué hay que comprar. Devuelve dos cosas: *faltantes*, que es la lista de lo que hay que comprar, y *advertencias*, que son las comidas elegidas que no tienen receta cargada.
@@ -161,7 +164,7 @@ Guarda la última lista en *mensaje.txt*, en la raíz del proyecto. Sirve como r
 | menu_semanal, comidas_del_menu, guardar_menu | el menú de la semana |
 | ingredientes_de | Ver recetas |
 | comida_existente, interpretar_ingrediente, normalizar, agregar_receta, UNIDADES | Cargar receta |
-| stock_actual, se_usa_en_recetas, actualizar_stock | Mi alacena |
+| stock_actual, se_usa_en_recetas, actualizar_stock, sumar_al_stock | Mi alacena y confirmación de factura |
 | calcular_lista, armar_mensaje, guardar_evidencia, formatear_cantidad | cerrar_menu_y_procesar |
 | ErrorDeDatos | todos los try/except |
 
