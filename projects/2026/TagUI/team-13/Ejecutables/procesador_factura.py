@@ -74,20 +74,22 @@ def _validar_configuracion(config):
 
 
 def construir_prompt(ingredientes_conocidos):
-    """Arma una instruccion en una sola linea para que TagUI la escriba completa."""
+    """Arma una instruccion compacta con los nombres y unidades del stock."""
     if isinstance(ingredientes_conocidos, dict):
-        nombres = sorted({str(valor[0]) for valor in ingredientes_conocidos.values()})
+        nombres = sorted({
+            f"{valor[0]} ({valor[1]})" for valor in ingredientes_conocidos.values()
+        })
     else:
         nombres = sorted({str(nombre) for nombre in ingredientes_conocidos})
     conocidos = ", ".join(nombres) if nombres else "ninguno"
     return (
-        "Lee la foto adjunta. Responde EXCLUSIVAMENTE con una lista plana: un producto por "
-        "renglon, en el formato exacto Ingrediente, cantidad, unidad. No agregues saludo, "
-        "introduccion, titulo, explicaciones, Markdown, totales ni comentario de cierre. "
-        "Ejemplo de formato: Papa, 1, kg. Unidades permitidas: kg, lt o unidad. "
-        "Usa estos nombres existentes cuando correspondan: " + conocidos + ". "
-        "Ignora precios e impuestos. No inventes datos; omite productos cuya cantidad o unidad "
-        "no puedas determinar."
+        "Lee el ticket adjunto. Devuelve solo alimentos, un renglon por alimento, sin titulo "
+        "ni comentarios, con el formato exacto Nombre, cantidad, unidad. Unidades: kg, lt, "
+        "unidad. Para productos conocidos, usa exactamente el nombre y la unidad indicada: "
+        + conocidos + ". "
+        "Convierte cantidades explicitas a unidad base (1 docena de huevos = 12 unidades). "
+        "No cambies unidades ni inventes conversiones; omite un producto si no puedes "
+        "expresarlo en su unidad indicada. No incluyas precios."
     )
 
 

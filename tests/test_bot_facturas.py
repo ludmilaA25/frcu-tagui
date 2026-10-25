@@ -33,36 +33,62 @@ class BotFacturasTests(unittest.TestCase):
     def test_solicita_confirmacion_y_guarda_estado(self, responder):
         productos = [("Papa", 2.0, "kg")]
 
-        bot.solicitar_confirmacion_factura(15, productos)
+        with patch("bot.compras.stock_proyectado_de_compra", return_value=productos):
+            bot.solicitar_confirmacion_factura(15, productos)
 
         self.assertEqual(bot.confirmaciones_factura[15]["message_id"], 42)
         self.assertEqual(bot.confirmaciones_factura[15]["ingredientes"], productos)
+        self.assertEqual(bot.confirmaciones_factura[15]["stock_proyectado"], productos)
         self.assertIn("✅ Confirmar", str(responder.call_args))
+        self.assertIn("Papa, 2, kg", responder.call_args.args[1])
 
     @patch("bot.editar")
     @patch("bot.texto_alacena", return_value="🥫 En la alacena hay Papa")
     @patch("bot.compras.sumar_al_stock")
     def test_confirmar_suma_stock_y_cierra_confirmacion(self, sumar, texto, editar):
         productos = [("Papa", 2.0, "kg")]
-        bot.confirmaciones_factura[15] = {"message_id": 42, "ingredientes": productos}
+        bot.confirmaciones_factura[15] = {
+            "message_id": 42,
+            "ingredientes": productos,
+            "stock_proyectado": [("Papa", 4.0, "kg")],
+        }
 
         bot.atender_boton_de_factura(15, 42, "factura:confirmar")
 
         sumar.assert_called_once_with(productos)
         self.assertNotIn(15, bot.confirmaciones_factura)
-        editar.assert_called_once_with(15, 42, "✅ Compra confirmada.\n\n🥫 En la alacena hay Papa")
+        editar.assert_called_once_with(
+            15, 42, "✅ Compra confirmada.\n\n🥫 En la alacena hay Papa"
+        )
 
     @patch("bot.responder")
+    @patch("bot.compras.ingredientes_conocidos", return_value={"papa": ("Papa", "kg")})
+    @patch("bot.procesador_factura.procesar_factura", return_value="Papa, 2, kg\nLista detectada:")
     @patch("bot.descargar_foto_telegram", return_value=Path("/tmp/factura_test.jpg"))
-    def test_recibe_foto_solo_si_esta_esperandola(self, descargar, responder):
+    @patch("bot.compras.stock_proyectado_de_compra", return_value=[("Papa", 6.0, "kg")])
+    def test_recibe_foto_y_muestra_resultado_para_confirmar(
+        self, proyectado, descargar, procesar, conocidos, responder
+    ):
         bot.esperando_foto_factura.add(15)
+        responder.side_effect = [
+            {"ok": True},
+            {"ok": True, "result": {"message_id": 43}},
+        ]
 
         bot.atender_foto_factura(15, [{"file_id": "pequena"}, {"file_id": "grande", "file_size": 50}])
 
         descargar.assert_called_once_with("grande")
+        procesar.assert_called_once_with(
+            Path("/tmp/factura_test.jpg"), {"papa": ("Papa", "kg")}
+        )
         self.assertEqual(bot.fotos_factura[15], Path("/tmp/factura_test.jpg"))
         self.assertNotIn(15, bot.esperando_foto_factura)
-        responder.assert_called_once()
+        self.assertEqual(bot.confirmaciones_factura[15]["ingredientes"], [("Papa", 2.0, "kg")])
+        vista_previa = responder.call_args_list[1].args[1]
+        self.assertIn("Papa, 6, kg", vista_previa)
+        self.assertNotIn("Omití", vista_previa)
+        self.assertNotIn("Lista detectada:", vista_previa)
+        self.assertNotIn("Lista detectada:", str(bot.confirmaciones_factura[15]["ingredientes"]))
 
     @patch("bot.atender_foto_factura")
     @patch("bot.es_del_chat_permitido", return_value=True)

@@ -28,6 +28,7 @@ import requests
 #Traemos los modulos de compras y robot_telegram_web para poder usar sus funciones
 import compras
 import procesamiento
+import procesador_factura
 from configuracion import leer_config
 
 # La configuración se carga en main(), no al importar el módulo, para poder
@@ -277,7 +278,9 @@ def pedir_foto_factura(chat_id, message_id):
     _limpiar_foto_factura(chat_id)
     confirmaciones_factura.pop(chat_id, None)
     esperando_foto_factura.add(chat_id)
-    editar(chat_id, message_id, "🧾 Enviame una foto clara de la factura o ticket.",
+    editar(chat_id, message_id,
+           "🧾 Enviame una foto clara de la factura o ticket. "
+           "La imagen se enviará a Gemini para leer los productos; evitá incluir datos personales.",
            [[{"text": "❌ Cancelar", "callback_data": "factura:cancelar"}]])
 
 
@@ -293,18 +296,41 @@ def atender_foto_factura(chat_id, fotos):
     _limpiar_foto_factura(chat_id)
     fotos_factura[chat_id] = ruta
     esperando_foto_factura.discard(chat_id)
-    responder(chat_id, "✅ Foto recibida y descargada. Quedó preparada para el módulo lector; "
-              "la alacena todavía no fue modificada.")
+    responder(chat_id, "⏳ Foto recibida. Estoy leyendo el ticket con Gemini...")
+    try:
+        respuesta = procesador_factura.procesar_factura(
+            ruta, compras.ingredientes_conocidos()
+        )
+        ingredientes, rechazados = compras.interpretar_respuesta_factura(respuesta)
+        if not ingredientes:
+            responder(
+                chat_id,
+                "⚠ No pude leer productos del ticket. La alacena no cambió; "
+                "podés intentar con otra foto o cargar la compra desde 🥫 Mi alacena.",
+                [[{"text": "❌ Cerrar", "callback_data": "factura:cancelar"}]],
+            )
+            return
+        solicitar_confirmacion_factura(chat_id, ingredientes)
+    except Exception as error:
+        print(f"No se pudo procesar la factura de {chat_id}: {error}")
+        responder(
+            chat_id,
+            "⚠ No pude leer el ticket. No modifiqué la alacena. "
+            "Podés cargar la compra manualmente desde 🥫 Mi alacena.",
+            [[{"text": "❌ Cerrar", "callback_data": "factura:cancelar"}]],
+        )
 
 
 def solicitar_confirmacion_factura(chat_id, ingredientes):
     """Muestra el resultado del lector externo y espera confirmación explícita."""
-    lineas = [f"- {nombre}: {compras.formatear_cantidad(cantidad)} {unidad}"
-              for nombre, cantidad, unidad in ingredientes]
+    stock_proyectado = compras.stock_proyectado_de_compra(ingredientes)
+    lineas = [f"{nombre}, {compras.formatear_cantidad(cantidad)}, {unidad}"
+              for nombre, cantidad, unidad in stock_proyectado]
+    texto = "\n".join(lineas)
+    texto += "\n\nConfirmá para guardar estos totales en la alacena."
     enviado = responder(
         chat_id,
-        "Revisá los productos detectados. Todavía no actualicé la alacena.\n\n"
-        + "\n".join(lineas),
+        texto,
         [[{"text": "✅ Confirmar", "callback_data": "factura:confirmar"},
           {"text": "❌ Cancelar", "callback_data": "factura:cancelar"}]],
     )
@@ -312,6 +338,7 @@ def solicitar_confirmacion_factura(chat_id, ingredientes):
         confirmaciones_factura[chat_id] = {
             "message_id": enviado["result"]["message_id"],
             "ingredientes": ingredientes,
+            "stock_proyectado": stock_proyectado,
         }
 
 
