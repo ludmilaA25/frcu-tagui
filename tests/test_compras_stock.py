@@ -129,5 +129,27 @@ class InterpretarFacturaTests(unittest.TestCase):
         self.assertEqual(rechazados, ["Aquí está la lista:", "Espero que te sirva."])
 
 
+class FaltantesRecetaTests(unittest.TestCase):
+    def test_calcula_ingredientes_faltantes_para_receta(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            (Path(carpeta) / "StockActual.csv").write_text(
+                "Ingrediente,CantidadDisponible,Unidad\nHuevo,4,unidad\nLeche,0.5,lt\n",
+                encoding="utf-8",
+            )
+            (Path(carpeta) / "BaseDatos.csv").write_text(
+                "Comida,Ingrediente,Cantidad,Unidad\n"
+                "Tarta,Huevo,8,unidad\nTarta,Leche,1,lt\nTarta,Harina,0.2,kg\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(compras, "CARPETA_DATOS", Path(carpeta)):
+                faltantes = compras.faltantes_para_receta("Tarta")
+
+        self.assertEqual(
+            faltantes,
+            [("Huevo", 4, "unidad"), ("Leche", 0.5, "lt"), ("Harina", 0.2, "kg")],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

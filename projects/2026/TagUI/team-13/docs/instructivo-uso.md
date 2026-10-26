@@ -39,6 +39,7 @@ Aparece el menú principal:
 [ 📅 Menú de la semana ]
 [ 📖 Ver recetas ]  [ ➕ Cargar receta ]
 [ 🥫 Mi alacena ]
+[ 🧾 Cargar factura ]
 ```
 
 Los tres primeros botones arman una lista de compras. Los de abajo sirven para
@@ -84,7 +85,12 @@ mano), aparece marcada con `⚠ sin receta`.
 ### 📖 Ver recetas
 
 Muestra un botón por cada comida cargada. Tocás una y ves sus ingredientes con las
-cantidades. Sirve, por ejemplo, para fijarte si una comida ya existe antes de cargarla.
+cantidades. **🥘 ¿Tengo todo?** compara la receta con `StockActual.csv`:
+
+- Si alcanza el stock, el bot confirma que tenés todos los ingredientes.
+- Si falta algo, muestra solo los ingredientes y cantidades faltantes, por ejemplo:
+  `Huevo: 4 unidad` y `Leche: 1 lt`.
+- **⬅ Ver receta**, **📖 Otra receta** y **🏠 Menú** permiten continuar navegando.
 
 ### ➕ Cargar receta
 
@@ -136,8 +142,26 @@ Leche, 0, lt
 - Si cargás algo que **ninguna receta usa** (por ejemplo `Papas` en vez de `Papa`), lo
   guarda igual pero te avisa, porque así no se descontaría de nada.
 
-**El bot no actualiza la alacena solo:** no sabe qué compraste ni qué cocinaste. Lo
-tiene que mantener la persona que lo usa, por ejemplo después de ir al súper.
+La alacena se puede actualizar manualmente como se describe arriba o a partir de una
+foto de ticket confirmada con **🧾 Cargar factura**.
+
+### 🧾 Cargar factura
+
+1. Tocá **🧾 Cargar factura** y enviá una foto clara del ticket en el chat privado del bot.
+2. Gemini leerá el ticket en el Chrome de TagUI. La foto se carga a un servicio externo;
+  evitá enviar datos personales que no sean necesarios.
+3. El bot muestra solo los productos interpretados y el total que quedaría en la alacena.
+  Por ejemplo, si hay 4 huevos y el ticket suma 12, verás `Huevo, 16, unidad`.
+4. Tocá **✅ Confirmar** para sumar la compra una sola vez o **❌ Cancelar** para dejar
+  el stock igual. Después de confirmar, el bot muestra la alacena completa y ofrece
+  **🏠 Volver al menú**.
+5. Si Gemini falla o tarda más de 60 segundos, elegí **🥫 Cargar manualmente** o
+  **🏠 Volver al menú**. El Plan B usa la edición de alacena ya existente.
+
+Una copia local del ticket queda en `docs/evidencia/facturas/` para trazabilidad. La
+carpeta está excluida de Git: revisá y borrá las fotos cuando ya no sean necesarias.
+La respuesta de stock y la confirmación se envían al **chat privado del bot**; las listas
+de compras calculadas para recetas siguen enviándose al **grupo configurado**.
 
 ### Qué pasa después de elegir
 

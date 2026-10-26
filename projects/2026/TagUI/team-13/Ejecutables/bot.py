@@ -19,8 +19,10 @@
 #   internet: alcanza con que la PC tenga conexión.
 
 import random
+import shutil
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -37,6 +39,9 @@ API = None
 API_ARCHIVOS = None
 CHAT_PERMITIDO = None
 GRUPO = ""
+CARPETA_EVIDENCIA_FACTURAS = (
+    Path(__file__).resolve().parent.parent / "docs" / "evidencia" / "facturas"
+)
 
 # Estado de cada menú de botones abierto, por (chat_id, message_id):
 #   {"modo": "principal" | "una" | "varias", "elegidas": [...]}
@@ -175,7 +180,7 @@ def atender_boton(consulta):
 
     comidas = compras.comidas_disponibles()
 
-    if dato == "volver":
+    if dato in ("volver", "inicio"):
         menu.update(modo="principal", elegidas=[])
         editar(chat_id, message_id, "¿Qué querés hacer?", botones_principales())
     elif dato == "modo:una":
@@ -230,13 +235,49 @@ def atender_boton(consulta):
     # --- ver las recetas cargadas ---
     elif dato == "recetas":
         menu["modo"] = "recetas"
+        botones_recetas = botones_de_comidas("recetas", comidas)
+        # Insertar botón de resumen antes del "Volver"
+        botones_recetas.insert(-1, [{"text": "📋 Resumen de todas", "callback_data": "recetas:resumen"}])
         editar(chat_id, message_id,
                f"Hay {len(comidas)} recetas cargadas. Tocá una para ver sus ingredientes.",
-               botones_de_comidas("recetas", comidas))
+               botones_recetas)
+    elif dato == "recetas:resumen":
+        mostrar_resumen_recetas(chat_id, message_id, comidas)
     elif dato.startswith("ver:"):
         comida = comidas[int(dato.split(":")[1])]
-        editar(chat_id, message_id, texto_receta(comida),
-               [[{"text": "⬅ Volver al listado", "callback_data": "recetas"}]])
+        menu["comida_actual"] = comida
+        editar(
+            chat_id, message_id, texto_receta(comida),
+            [[{"text": "🥘 ¿Tengo todo?", "callback_data": "receta:disponibilidad"}],
+             [{"text": "⬅ Volver al listado", "callback_data": "recetas"},
+              {"text": "🏠 Menú", "callback_data": "inicio"}]],
+        )
+    elif dato == "receta:disponibilidad":
+        comida = menu.get("comida_actual")
+        if not comida:
+            editar(chat_id, message_id, "Elegí una receta para revisar sus ingredientes.",
+                   botones_de_comidas("recetas", comidas))
+            return
+        try:
+            faltantes = compras.faltantes_para_receta(comida)
+        except compras.ErrorDeDatos as error:
+            editar(chat_id, message_id, f"⚠ No pude revisar la receta: {error}")
+            return
+        if faltantes:
+            renglones = [
+                f"- {nombre}: {compras.formatear_cantidad(cantidad)} {unidad}"
+                for nombre, cantidad, unidad in faltantes
+            ]
+            texto = f"Para {comida} te falta:\n\n" + "\n".join(renglones)
+        else:
+            texto = f"✅ Tenés todos los ingredientes para {comida}."
+        indice = comidas.index(comida)
+        editar(
+            chat_id, message_id, texto,
+            [[{"text": "⬅ Ver receta", "callback_data": f"ver:{indice}"}],
+             [{"text": "📖 Otra receta", "callback_data": "recetas"},
+              {"text": "🏠 Menú", "callback_data": "inicio"}]],
+        )
 
     # --- cargar una receta nueva ---
     elif dato == "cargar":
@@ -246,11 +287,45 @@ def atender_boton(consulta):
     # --- la alacena: verla y actualizarla ---
     elif dato == "alacena":
         editar(chat_id, message_id, texto_alacena(),
-               [[{"text": "✏ Actualizar", "callback_data": "alacena:actualizar"},
+               [[{"text": "✏ Actualizar", "callback_data": "alacena:actualizar"}],
+                [{"text": "📖 Ver recetas", "callback_data": "recetas"},
                  {"text": "⬅ Volver", "callback_data": "volver"}]])
     elif dato == "alacena:actualizar":
         del menus[(chat_id, message_id)]
         empezar_edicion_alacena(chat_id, message_id)
+
+
+def mostrar_resumen_recetas(chat_id, message_id, comidas):
+    """Muestra un resumen de todas las recetas: cuáles se pueden hacer y cuáles no."""
+    completas = []
+    incompletas = []
+    for comida in comidas:
+        try:
+            faltantes = compras.faltantes_para_receta(comida)
+        except compras.ErrorDeDatos:
+            incompletas.append(f"⚠ {comida}: no se pudo revisar")
+            continue
+        if not faltantes:
+            completas.append(f"✅ {comida}")
+        else:
+            detalles = ", ".join(
+                f"{compras.formatear_cantidad(cant)} {unid} de {nombre}"
+                for nombre, cant, unid in faltantes
+            )
+            incompletas.append(f"❌ {comida}: te falta {detalles}")
+    partes = []
+    if completas:
+        partes.append("🟢 Podés hacer:\n" + "\n".join(completas))
+    if incompletas:
+        partes.append("🔴 Te falta algo para:\n" + "\n".join(incompletas))
+    if not completas and not incompletas:
+        partes.append("No hay recetas cargadas.")
+    texto = "\n\n".join(partes)
+    editar(
+        chat_id, message_id, texto,
+        [[{"text": "📖 Ver recetas", "callback_data": "recetas"},
+          {"text": "🏠 Menú", "callback_data": "inicio"}]],
+    )
 
 
 def descargar_foto_telegram(file_id):
@@ -274,6 +349,24 @@ def _limpiar_foto_factura(chat_id):
         ruta.unlink(missing_ok=True)
 
 
+def archivar_foto_factura(ruta_temporal):
+    CARPETA_EVIDENCIA_FACTURAS.mkdir(parents=True, exist_ok=True)
+    nombre = datetime.now().strftime("ticket_%Y%m%d_%H%M%S_%f") + Path(ruta_temporal).suffix
+    ruta_evidencia = CARPETA_EVIDENCIA_FACTURAS / nombre
+    shutil.copy2(ruta_temporal, ruta_evidencia)
+    return ruta_evidencia
+
+
+
+
+
+def botones_plan_b_factura():
+    return [
+        [{"text": "🥫 Cargar manualmente", "callback_data": "factura:manual"}],
+        [{"text": "🏠 Volver al menú", "callback_data": "factura:menu"}],
+    ]
+
+
 def pedir_foto_factura(chat_id, message_id):
     _limpiar_foto_factura(chat_id)
     confirmaciones_factura.pop(chat_id, None)
@@ -291,11 +384,27 @@ def atender_foto_factura(chat_id, fotos):
     try:
         ruta = descargar_foto_telegram(foto["file_id"])
     except (requests.RequestException, RuntimeError, KeyError) as error:
-        responder(chat_id, f"⚠ No pude descargar la foto: {error}. Mandala de nuevo o tocá /cancelar.")
+        responder(
+            chat_id,
+            f"⚠ No pude descargar la foto: {error}",
+            botones_plan_b_factura(),
+        )
         return
     _limpiar_foto_factura(chat_id)
     fotos_factura[chat_id] = ruta
     esperando_foto_factura.discard(chat_id)
+    try:
+        evidencia = archivar_foto_factura(ruta)
+        print(f"Evidencia de factura guardada en: {evidencia}")
+    except OSError as error:
+        print(f"No se pudo guardar la evidencia de la factura: {error}")
+        responder(
+            chat_id,
+            "⚠ No pude guardar la foto de evidencia. No inicié la lectura; "
+            "podés cargar la compra manualmente.",
+            botones_plan_b_factura(),
+        )
+        return
     responder(chat_id, "⏳ Foto recibida. Estoy leyendo el ticket con Gemini...")
     try:
         respuesta = procesador_factura.procesar_factura(
@@ -305,9 +414,8 @@ def atender_foto_factura(chat_id, fotos):
         if not ingredientes:
             responder(
                 chat_id,
-                "⚠ No pude leer productos del ticket. La alacena no cambió; "
-                "podés intentar con otra foto o cargar la compra desde 🥫 Mi alacena.",
-                [[{"text": "❌ Cerrar", "callback_data": "factura:cancelar"}]],
+                "⚠ No pude leer productos del ticket. La alacena no cambió.",
+                botones_plan_b_factura(),
             )
             return
         solicitar_confirmacion_factura(chat_id, ingredientes)
@@ -316,8 +424,8 @@ def atender_foto_factura(chat_id, fotos):
         responder(
             chat_id,
             "⚠ No pude leer el ticket. No modifiqué la alacena. "
-            "Podés cargar la compra manualmente desde 🥫 Mi alacena.",
-            [[{"text": "❌ Cerrar", "callback_data": "factura:cancelar"}]],
+            "Podés cargar la compra manualmente.",
+            botones_plan_b_factura(),
         )
 
 
@@ -343,6 +451,18 @@ def solicitar_confirmacion_factura(chat_id, ingredientes):
 
 
 def atender_boton_de_factura(chat_id, message_id, dato):
+    if dato == "factura:manual":
+        esperando_foto_factura.discard(chat_id)
+        confirmaciones_factura.pop(chat_id, None)
+        _limpiar_foto_factura(chat_id)
+        empezar_edicion_alacena(chat_id, message_id)
+        return
+    if dato == "factura:menu":
+        esperando_foto_factura.discard(chat_id)
+        confirmaciones_factura.pop(chat_id, None)
+        _limpiar_foto_factura(chat_id)
+        abrir_menu(chat_id)
+        return
     if dato == "factura:nueva":
         menu = menus.pop((chat_id, message_id), None)
         if menu is not None:
@@ -361,12 +481,18 @@ def atender_boton_de_factura(chat_id, message_id, dato):
             return
         del confirmaciones_factura[chat_id]
         _limpiar_foto_factura(chat_id)
-        editar(chat_id, message_id, "✅ Compra confirmada.\n\n" + texto_alacena())
+        editar(
+            chat_id, message_id, "✅ Compra confirmada.\n\n" + texto_alacena(),
+            [[{"text": "🏠 Volver al menú", "callback_data": "factura:menu"}]],
+        )
     elif dato == "factura:cancelar":
         esperando_foto_factura.discard(chat_id)
         confirmaciones_factura.pop(chat_id, None)
         _limpiar_foto_factura(chat_id)
-        editar(chat_id, message_id, "❌ Carga de factura cancelada. No actualicé la alacena.")
+        editar(
+            chat_id, message_id, "❌ Carga de factura cancelada. No actualicé la alacena.",
+            [[{"text": "🏠 Volver al menú", "callback_data": "factura:menu"}]],
+        )
 
 
 # ==================================================================
@@ -549,7 +675,9 @@ def terminar_edicion_alacena(chat_id, message_id):
         editar(chat_id, message_id, "Esta edición ya terminó. Mandá /start para abrir el menú.")
         return
     del alacenas_en_edicion[chat_id]
-    editar(chat_id, message_id, "✅ Alacena guardada.\n\n" + texto_alacena())
+    editar(chat_id, message_id, "✅ Alacena guardada.\n\n" + texto_alacena(),
+           [[{"text": "📖 Ver recetas", "callback_data": "recetas"},
+             {"text": "🏠 Volver al menú", "callback_data": "factura:menu"}]])
 
 
 # ==================================================================

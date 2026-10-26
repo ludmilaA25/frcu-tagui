@@ -96,12 +96,16 @@ cuenta de la persona, como lo haría ella misma.
   una captura como confirmación.
 - Mantener los datos desde el bot: ver y cargar recetas, cambiar o sortear el menú y
   actualizar la alacena.
+- Recibir una foto del ticket en el chat privado del bot, leerla con Gemini y actualizar
+  la alacena **solo después de que la persona confirme** los totales.
+- Consultar si una receta puede prepararse con el stock actual y mostrar qué cantidades
+  faltan.
 
 **No incluye:**
 
 - Precios ni presupuesto.
-- Descontar solo el stock después de comprar o cocinar: la alacena la actualiza la
-  persona (ver la mejora de la sección 7).
+- Registrar compras o consumos automáticamente sin una foto de ticket o una actualización
+  manual de la persona.
 - Envases o presentaciones: el sistema puede pedir "0.2 kg de pan rallado", aunque en
   el súper se compre un paquete.
 
@@ -114,6 +118,9 @@ cuenta de la persona, como lo haría ella misma.
   persona que no ve la pantalla.
 - Hay que **iniciar sesión en Telegram Web una vez** (escaneando un QR), en el Chrome
   propio de TagUI.
+- Hay que **iniciar sesión en Gemini** en ese mismo Chrome antes de cargar una factura.
+- El ticket se sube a Gemini; no se deben enviar fotos con datos personales que no sean
+  necesarios. Se conserva una copia local en `docs/evidencia/facturas/`, excluida de Git.
 - Hay que armar `config.txt` con el token del bot, el chat autorizado y el nombre exacto
   del grupo.
 - Solo se aceptan las unidades `kg`, `lt` y `unidad`.
@@ -122,10 +129,9 @@ cuenta de la persona, como lo haría ella misma.
 
 **A largo plazo** (lo que puede romperse o limitar el uso con el tiempo):
 
-- **Dependencia del diseño de Telegram Web:** si Telegram cambia su página, el robot
-  puede dejar de encontrar el buscador o la caja de mensaje. Para que el arreglo sea en
-  un solo lugar, todos los selectores están juntos al principio de
-  `robot_telegram_web.py`.
+- **Dependencia del diseño de las páginas web:** si Telegram o Gemini cambian sus
+  interfaces, el robot puede dejar de encontrar controles. Los selectores de Telegram
+  están centralizados en `robot_telegram_web.py`; los de Gemini, en `configuracion.py`.
 - **El stock depende de que la persona lo mantenga al día.** Si no lo actualiza, la lista
   pide cosas que ya hay, o no pide cosas que faltan.
 - **Una sola PC y un solo usuario:** el bot corre en la PC de una persona y escribe
@@ -146,10 +152,15 @@ cuenta de la persona, como lo haría ella misma.
 | Búsqueda solo entre chats propios | El robot nunca elige un resultado de la búsqueda global de Telegram, para no escribirle a un desconocido con el mismo nombre. | `robot_telegram_web.py` → `_resultado_de_busqueda` |
 | Verificación del pegado | Después de pegar, el robot lee la caja de mensaje y compara que diga exactamente la lista. | `robot_telegram_web.py` → `_pegar_mensaje` |
 | Verificación del envío | Después de tocar "enviar", el robot espera a que la caja quede vacía, que es la señal de que el mensaje salió. | `robot_telegram_web.py` → `_enviar` |
-| Tiempo máximo | Si el robot tarda más de 3 minutos, se lo corta y el bot sigue atendiendo. | `bot.py` → `ejecutar_robot` |
+| Tiempo máximo Telegram Web | Si el robot de envío tarda más de 3 minutos, se lo corta y el bot sigue atendiendo. | `bot.py` → `ejecutar_robot` |
 | Plan B | Si el robot falla, el bot manda la lista él mismo por la Bot API, con el motivo. | `bot.py` → `cerrar_menu_y_procesar` |
 | Evidencia | Cada corrida deja la lista en `mensaje.txt`, y el bot confirma con una captura de Telegram Web. | `compras.py` → `guardar_evidencia`, `robot_telegram_web.py` → `_sacar_captura` |
 | Prueba de conexión | Comprueba que el token sea válido sin mandarle un mensaje a nadie. | `prueba_conexion.py` |
+| Lectura y validación de ticket | Gemini devuelve texto; se normalizan formatos conocidos y solo se muestran ingredientes válidos. | `procesador_factura.py`, `compras.py` → `interpretar_respuesta_factura` |
+| Tiempo máximo Gemini | El lector completo tiene un límite de 60 segundos; al vencer, se limpian procesos TagUI y el bot ofrece carga manual. | `bot.py` → `ejecutar_lector_factura` |
+| Confirmación de compra | El stock solo se actualiza cuando la persona confirma los totales proyectados. | `bot.py` → `atender_boton_de_factura`, `compras.py` → `sumar_al_stock` |
+| Evidencia del ticket | Se guarda una copia local en `docs/evidencia/facturas/`, excluida de Git porque puede contener datos personales. | `bot.py` → `archivar_foto_factura` |
+| Disponibilidad de receta | Compara ingredientes requeridos y stock; informa si alcanza o qué cantidades faltan. | `compras.py` → `faltantes_para_receta`, `bot.py` → `receta:disponibilidad` |
 
 ---
 
@@ -171,12 +182,19 @@ robot_telegram_web.py (TagUI)                         ← PARTE RPA
 bot.py confirma con la captura   (si el robot falla: manda la lista por la Bot API)
 ```
 
+  **Carga de factura (Etapa 2):** el bot descarga la foto, archiva una copia local y llama
+  al lector TagUI de Gemini. `compras.py` normaliza y valida los renglones; el bot muestra
+  los totales proyectados en el chat privado y espera Confirmar/Cancelar. Si la lectura
+  falla o supera 60 segundos, ofrece actualizar la alacena manualmente. La foto nunca
+  modifica el stock sin confirmación.
+
 | Archivo | Rol |
 |---|---|
 | `Ejecutables/bot.py` | Escucha a Telegram, muestra los botones, coordina todo y responde. |
 | `Ejecutables/compras.py` | Lee y escribe los CSV, valida los datos y calcula la lista. |
+| `Ejecutables/procesador_factura.py` | Maneja Gemini en Chrome con TagUI, adjunta el ticket y devuelve su respuesta. |
 | `Ejecutables/robot_telegram_web.py` | El robot RPA: maneja Chrome con TagUI. |
-| `Ejecutables/configuracion.py` | Lee `config.txt`. |
+| `Ejecutables/configuracion.py` | Lee `config.txt` y centraliza URL, selectores, timeout y plantilla de Gemini. |
 | `Ejecutables/prueba_conexion.py` | Prueba el token sin enviar nada. |
 
 La explicación detallada de cada archivo, función por función, está en
@@ -320,68 +338,40 @@ lechuga.
 
 ---
 
-## 7. Mejora propuesta para la Etapa 2: cargar la factura con una foto
+## 7. Mejora implementada en la Etapa 2: cargar la factura con una foto
 
-### El problema que resuelve
+### Flujo implementado
 
-Hoy la alacena la mantiene la persona a mano: después de ir al súper tiene que escribirle
-al bot cada cosa que compró. Es lento, y si no lo hace, **el stock queda desactualizado y
-la lista de compras sale mal**. Es la parte más débil del lazo de retroalimentación
-(sección 5.1): el "sensor" es manual.
+1. La persona toca **🧾 Cargar factura** en el chat privado del bot y envía la foto.
+2. `bot.py` descarga el archivo desde Telegram y guarda una copia local en
+   `docs/evidencia/facturas/`. Esa carpeta está excluida de Git para no publicar tickets
+   que pueden contener datos personales.
+3. `procesador_factura.py` inicia TagUI, abre Gemini en el Chrome de TagUI, adjunta el
+   archivo y pide una respuesta plana, un producto por renglón.
+4. `configuracion.py` centraliza la URL, los selectores, el timeout y la plantilla del
+   prompt. El prompt recibe los nombres y unidades conocidos de recetas/alacena para
+   reducir variantes como "PAPA" frente a "Papa"; la respuesta no debe repetir esa lista.
+5. `compras.py` normaliza respuestas con nombre primero o cantidad primero, acepta
+   decimales con coma, valida nombres/unidades y calcula el stock proyectado. Las líneas
+   narrativas o incompatibles no se muestran como ingredientes.
+6. El bot muestra en el **chat privado** solo los productos leídos y el total proyectado.
+   La persona elige **✅ Confirmar** o **❌ Cancelar**. El stock solo se modifica al
+   confirmar; después se muestra la alacena completa y el botón **🏠 Volver al menú**.
+7. Si el lector falla o supera el límite de **60 segundos**, el bot ofrece **🥫 Cargar
+   manualmente** o volver al menú. La lista de compras calculada desde recetas continúa
+   enviándose al grupo configurado mediante Telegram Web.
 
-### La idea
+### Controles y límites
 
-La persona le **manda al bot una foto de la factura o ticket del súper**, y el sistema
-actualiza la alacena solo. Para entender la foto, un robot usa una **IA web** (por
-ejemplo ChatGPT, Gemini o Claude en el navegador), igual que lo haría una persona:
-abre la página, sube la foto y le pide que la pase a texto con un formato fijo.
-
-### Cómo podría funcionar
-
-1. **Nuevo botón en el menú:** 🧾 *Cargar factura*. El bot pide la foto.
-2. **El bot descarga la foto** desde Telegram. La Bot API la entrega en dos pasos:
-   `getFile` devuelve la ruta y después se baja de
-   `https://api.telegram.org/file/bot<TOKEN>/<ruta>`. Hoy `atender` en `bot.py` solo
-   procesa texto, así que hay que agregarle el caso `photo`.
-3. **El robot abre la IA en Chrome** (una nueva función en `robot_telegram_web.py` o en
-   un robot aparte), **sube la foto** con `r.upload(...)` y **pega una instrucción**
-   como esta:
-   > Pasá esta factura a una lista, un producto por renglón, con el formato
-   > `Ingrediente, cantidad, unidad`. Las unidades solo pueden ser kg, lt o unidad.
-   > Usá estos nombres cuando corresponda: Papa, Huevo, Leche, ... Ignorá lo que no sea
-   > comida.
-
-   Pasarle la lista de nombres que ya existen (`compras.ingredientes_conocidos()`) evita
-   que "PAPA NEGRA X KG" se cargue como un ingrediente nuevo.
-4. **El robot lee la respuesta** con `r.read(...)` y la devuelve como texto, igual que
-   hoy el robot devuelve la captura.
-5. **Se valida cada renglón** con la función que ya existe,
-   `compras.interpretar_ingrediente`. Los renglones que no se entienden se muestran como
-   hoy: "⚠ Estos renglones no los cargué".
-6. **La persona confirma:** el bot muestra lo que leyó con ✅ Confirmar / ❌ Cancelar.
-   Este paso es importante, porque la IA se puede equivocar.
-7. **Se suma al stock.** Ojo: hoy `compras.actualizar_stock` **reemplaza** la cantidad
-   ("lo que hay ahora"). Para una compra hay que **sumar** a lo que ya había, así que
-   hace falta una función nueva (por ejemplo `sumar_al_stock`).
-
-### Por qué es una buena mejora para la Etapa 2
-
-- **Sigue siendo RPA puro:** un robot que abre una página, sube un archivo, escribe y lee
-  el resultado, como una persona. Además agrega pasos nuevos de TagUI (`upload` y `read`).
-- **Cierra el lazo de retroalimentación** de forma automática: la medición del stock deja
-  de depender de que alguien escriba todo a mano.
-- **Reutiliza lo que ya está hecho:** la validación de ingredientes, el formato de los
-  renglones, el manejo de botones y el esquema de robot con tiempo máximo y plan B.
-
-### Riesgos a tener en cuenta
-
-- **Sesión en la IA:** la página de la IA pide iniciar sesión. Se resuelve igual que con
-  Telegram Web: una vez, en el Chrome de TagUI.
-- **La IA puede leer mal o inventar datos.** Por eso la confirmación de la persona es
-  obligatoria.
-- **Cambios en la página de la IA:** poner los selectores juntos al principio del
-  archivo, igual que en `robot_telegram_web.py`.
-- **Privacidad:** la factura puede tener datos personales (nombre, CUIT, tarjeta). Hay
-  que avisarle al usuario que la foto se sube a un servicio externo.
-- **Plan B:** si el robot no puede leer la factura, el bot le pide a la persona que
-  cargue la compra a mano, con el flujo actual de 🥫 Mi alacena.
+- La foto se envía a un servicio externo (Gemini). No se deben enviar datos personales
+  que no sean necesarios. La evidencia local debe borrarse cuando ya no haga falta.
+- La confirmación humana es obligatoria porque la IA puede omitir o interpretar mal un
+  producto. Solo se suman las líneas que superaron la validación.
+- Los productos conocidos deben mantener la misma unidad que tienen en las recetas y
+  el stock. El bot no inventa conversiones de peso/volumen; las cantidades contables
+  explícitas, como una docena, se expresan como unidades.
+- La navegación por Gemini depende de selectores web centralizados en
+  `Ejecutables/configuracion.py`; si su interfaz cambia, esos selectores pueden requerir
+  actualización.
+- El archivo de configuración admite overrides opcionales `FACTURA_*`; los valores
+  predeterminados y la plantilla están en `configuracion.py`.

@@ -217,6 +217,52 @@ def stock_actual():
             for fila in _leer_csv("StockActual.csv")]
 
 
+def faltantes_para_receta(comida):
+    """Devuelve ingredientes y cantidades que faltan para preparar una receta."""
+    receta = ingredientes_de(comida)
+    if not receta:
+        raise ErrorDeDatos(f"No hay ingredientes cargados para «{comida}».")
+
+    necesarios = {}
+    for numero_fila, (nombre, cantidad, unidad) in enumerate(receta, start=1):
+        clave = normalizar(nombre)
+        cantidad = _a_numero(cantidad, "BaseDatos.csv", numero_fila)
+        if clave in necesarios and necesarios[clave][2] != unidad:
+            raise ErrorDeDatos(f"{nombre} aparece con unidades incompatibles en la receta.")
+        if clave in necesarios:
+            necesarios[clave][1] += cantidad
+        else:
+            necesarios[clave] = [nombre, cantidad, unidad]
+
+    disponibles = {}
+    for numero_fila, (nombre, cantidad, unidad) in enumerate(stock_actual(), start=1):
+        clave = normalizar(nombre)
+        cantidad = _a_numero(cantidad, "StockActual.csv", numero_fila)
+        if clave in disponibles:
+            if disponibles[clave][1] != unidad:
+                raise ErrorDeDatos(f"{nombre} aparece con unidades incompatibles en la alacena.")
+            disponibles[clave][0] += cantidad
+        else:
+            disponibles[clave] = [cantidad, unidad]
+
+    faltantes = []
+    for clave, (nombre, cantidad, unidad) in necesarios.items():
+        cantidad_disponible, unidad_disponible = disponibles.get(clave, (0, unidad))
+        if unidad_disponible != unidad:
+            raise ErrorDeDatos(
+                f"{nombre} se receta en {unidad}, pero la alacena lo tiene en {unidad_disponible}."
+            )
+        faltante = round(cantidad - cantidad_disponible, 6)
+        if faltante <= 0:
+            continue
+        if unidad == "unidad":
+            faltante = math.ceil(faltante)
+        else:
+            faltante = round(faltante, 2)
+        faltantes.append((nombre, faltante, unidad))
+    return faltantes
+
+
 def se_usa_en_recetas(ingrediente):
     return any(normalizar(fila[1]) == normalizar(ingrediente) for fila in _leer_csv("BaseDatos.csv"))
 
