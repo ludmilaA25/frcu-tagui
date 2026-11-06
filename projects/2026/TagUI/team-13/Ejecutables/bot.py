@@ -295,6 +295,7 @@ def atender_boton(consulta):
         empezar_edicion_alacena(chat_id, message_id)
 
 
+# Filtro de recetas según la disponibilidad de sus ingredientes.
 def mostrar_resumen_recetas(chat_id, message_id, comidas):
     """Muestra un resumen de todas las recetas: cuáles se pueden hacer y cuáles no."""
     completas = []
@@ -343,12 +344,14 @@ def descargar_foto_telegram(file_id):
     return Path(temporal.name)
 
 
+# Elimina la foto temporal asociada al chat.
 def _limpiar_foto_factura(chat_id):
     ruta = fotos_factura.pop(chat_id, None)
     if ruta:
         ruta.unlink(missing_ok=True)
 
 
+# Guarda una copia de la factura como evidencia.
 def archivar_foto_factura(ruta_temporal):
     CARPETA_EVIDENCIA_FACTURAS.mkdir(parents=True, exist_ok=True)
     nombre = datetime.now().strftime("ticket_%Y%m%d_%H%M%S_%f") + Path(ruta_temporal).suffix
@@ -360,6 +363,7 @@ def archivar_foto_factura(ruta_temporal):
 
 
 
+# Devuelve las opciones manuales disponibles si falla la lectura.
 def botones_plan_b_factura():
     return [
         [{"text": "🥫 Cargar manualmente", "callback_data": "factura:manual"}],
@@ -367,6 +371,7 @@ def botones_plan_b_factura():
     ]
 
 
+# Solicita al usuario una foto de la factura.
 def pedir_foto_factura(chat_id, message_id):
     _limpiar_foto_factura(chat_id)
     confirmaciones_factura.pop(chat_id, None)
@@ -377,6 +382,7 @@ def pedir_foto_factura(chat_id, message_id):
            [[{"text": "❌ Cancelar", "callback_data": "factura:cancelar"}]])
 
 
+# Procesa la foto de factura recibida desde Telegram.
 def atender_foto_factura(chat_id, fotos):
     if chat_id not in esperando_foto_factura:
         return
@@ -450,6 +456,7 @@ def solicitar_confirmacion_factura(chat_id, ingredientes):
         }
 
 
+# Procesa las opciones de confirmación o cancelación de la factura.
 def atender_boton_de_factura(chat_id, message_id, dato):
     if dato == "factura:manual":
         esperando_foto_factura.discard(chat_id)

@@ -19,10 +19,12 @@ class ErrorProcesadorFactura(Exception):
     """La automatizacion no pudo obtener una lectura de la factura."""
 
 
+# Devuelve la configuración actual del servicio de IA.
 def _configuracion_actual():
     return leer_configuracion_factura()
 
 
+# Valida los parámetros necesarios para procesar la factura.
 def _validar_configuracion(config):
     faltantes = [
         clave for clave in (
@@ -55,6 +57,7 @@ def construir_prompt(ingredientes_conocidos):
     return plantilla.format(ingredientes_conocidos=conocidos)
 
 
+# Inicia TagUI y conserva la configuración de OpenSSL del sistema.
 def _iniciar_tagui():
     if platform.system() != "Linux":
         return r.init()
@@ -93,6 +96,7 @@ SELECTORES_ARCHIVO_FALLBACK = (
 )
 
 
+# Espera hasta que el selector esté disponible o venza el plazo.
 def _esperar(selector, segundos, deadline=None):
     limite = int(segundos)
     if deadline is not None:
@@ -105,6 +109,7 @@ def _esperar(selector, segundos, deadline=None):
     return bool(r.present(selector))
 
 
+# Busca el primer selector disponible.
 def _esperar_cualquiera(selectores, segundos, deadline=None):
     limite = int(segundos)
     if deadline is not None:
@@ -122,6 +127,7 @@ def _esperar_cualquiera(selectores, segundos, deadline=None):
 
 
 
+# Pulsa el primer botón de envío disponible.
 def _clic_enviar(config, deadline):
     for selector in config["selectores_enviar"]:
         if _esperar(selector, 3, deadline) and r.click(selector):
@@ -129,6 +135,7 @@ def _clic_enviar(config, deadline):
     return False
 
 
+# Lee el texto del selector si está disponible.
 def _leer_respuesta(selector):
     try:
         if not r.present(selector):
@@ -139,6 +146,7 @@ def _leer_respuesta(selector):
 
 
 
+# Obtiene información de los controles para adjuntar archivos.
 def _diagnosticar_adjunto():
     return r.dom(
         'return JSON.stringify({opciones:Array.from(document.querySelectorAll('
@@ -150,6 +158,7 @@ def _diagnosticar_adjunto():
         '.map(e=>({accept:e.accept,visible:!!(e.offsetWidth||e.offsetHeight||e.getClientRects().length)}))})'
     )
 
+# Espera una respuesta nueva y completa de la IA.
 def _esperar_respuesta_nueva(selector, respuesta_anterior, deadline):
     respuesta = ""
     lecturas_iguales = 0
@@ -262,6 +271,7 @@ def procesar_factura(ruta_factura, ingredientes_conocidos):
         r.close()
 
 
+# Lee los argumentos de línea de comandos.
 def _argumentos_cli():
     parser = argparse.ArgumentParser(
         description="Procesa manualmente una foto de factura con la IA web configurada."
@@ -275,6 +285,7 @@ def _argumentos_cli():
     return parser.parse_args()
 
 
+# Ejecuta el procesamiento de factura desde la línea de comandos.
 def main():
     args = _argumentos_cli()
     if not args.subir:
